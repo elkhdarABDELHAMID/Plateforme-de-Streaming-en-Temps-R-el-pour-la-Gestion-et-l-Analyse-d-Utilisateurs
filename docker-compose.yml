@@ -1,0 +1,170 @@
+# Fichier: docker-compose.yml
+
+services:
+  # Service ZooKeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - streaming-network
+    # Description en arabe: هذه الخدمة تشغل ZooKeeper لتنسيق Kafka.
+
+  # Service Kafka
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - streaming-network
+    # Description en arabe: هذه الخدمة تشغل Kafka لمعالجة التدفقات.
+
+  # Service MongoDB
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - streaming-network
+    # Description en arabe: قاعدة بيانات MongoDB لتخزين البيانات.
+
+  # Service Cassandra
+  cassandra:
+    image: cassandra:latest
+    container_name: cassandra
+    ports:
+      - "9042:9042"
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    environment:
+      - CASSANDRA_CLUSTER_NAME=StreamingCluster
+    networks:
+      - streaming-network
+    # Description en arabe: قاعدة بيانات Cassandra لتخزين البيانات.
+
+  # Service Spark Master
+  spark-master:
+    image: bitnami/spark:3.2.0
+    container_name: spark-master
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_MASTER_OPTS="-Dspark.worker.timeout=600"
+    networks:
+      - streaming-network
+    # Description en arabe: Spark Master لإدارة العاملين.
+
+  # Service Spark Worker
+  spark-worker:
+    image: bitnami/spark:3.2.0
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_WORKER_CORES=1
+      - SPARK_WORKER_MEMORY=1g
+    networks:
+      - streaming-network
+    # Description en arabe: Spark Worker لتنفيذ المهام.
+
+  # Service Ingestion
+  ingestion-service:
+    build:
+      context: ./ingestion
+      dockerfile: Dockerfile
+    container_name: ingestion-service
+    depends_on:
+      - kafka
+    volumes:
+      - ./ingestion:/app
+    networks:
+      - streaming-network
+    restart: on-failure
+    # Description en arabe: خدمة لإنتاج البيانات وإرسالها إلى Kafka.
+
+  # Service PySpark Streaming
+  pyspark-streaming:
+    build:
+      context: ./pyspark
+      dockerfile: Dockerfile
+    container_name: pyspark-streaming
+    depends_on:
+      - spark-master
+      - spark-worker
+      - kafka
+      - mongodb
+      - cassandra
+    volumes:
+      - ./pyspark:/app
+      - ./checkpoints:/checkpoints  # Volume pour les checkpoints
+    networks:
+      - streaming-network
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+          cpus: "2.0"
+        reservations:
+          memory: 2g
+    restart: on-failure
+    # Description en arabe: خدمة PySpark لمعالجة التدفقات وكتابتها إلى MongoDB وCassandra.
+
+  # Service Streamlit Dashboard
+  streamlit-dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: streamlit-dashboard
+    depends_on:
+      - mongodb
+      - cassandra
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./dashboard:/app
+    networks:
+      - streaming-network
+    # Description en arabe: لوحة تحكم Streamlit لعرض البيانات.
+
+# Configuration du réseau
+networks:
+  streaming-network:
+    driver: bridge
+    # Description en arabe: شبكة لربط الخدمات معًا.
+
+# Configuration des volumes
+volumes:
+  mongodb_data:
+  cassandra_data:
+  # Description en arabe: مجلدات دائمة لتخزين بيانات MongoDB وCassandra.
